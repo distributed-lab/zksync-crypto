@@ -61,6 +61,17 @@ pub trait Engine: ScalarEngine {
     /// Perform final exponentiation of the result of a miller loop.
     fn final_exponentiation(r: &Self::Fqk) -> Option<Self::Fqk>;
 
+    /// Compute the slope and intercept for point doubling.
+    fn line_double(t: Self::G2Affine) -> (Self::Fqe, Self::Fqe);
+
+    /// Compute the slope and intercept for point addition.
+    fn line_add(t: Self::G2Affine, p: Self::G2Affine) -> (Self::Fqe, Self::Fqe);
+
+    /// Compute the line function oracle.
+    fn line_function(q: Self::G2) -> Vec<(Self::Fqe, Self::Fqe)>;
+
+    fn multi_miller_loop(eval_points: &[(Self::G1Affine, Self::G2Affine)], lines: &[Vec<(Self::Fqe, Self::Fqe)>]) -> (Self::Fqk, Vec<Self::Fqk>);
+
     /// Performs a complete pairing operation `(p, q)`.
     fn pairing<G1, G2>(p: G1, q: G2) -> Self::Fqk
     where
@@ -69,6 +80,7 @@ pub trait Engine: ScalarEngine {
     {
         Self::final_exponentiation(&Self::miller_loop([(&(p.into().prepare()), &(q.into().prepare()))].iter())).unwrap()
     }
+
 }
 
 /// Projective representation of an elliptic curve point guaranteed to be

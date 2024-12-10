@@ -39,6 +39,20 @@ impl Engine for Bls12 {
     type Fqe = Fq2;
     type Fqk = Fq12;
 
+    fn line_double(t: Self::G2Affine) -> (Self::Fqe, Self::Fqe){
+        unimplemented!()
+    }
+
+    fn line_add(t: Self::G2Affine, p: Self::G2Affine) -> (Self::Fqe, Self::Fqe){
+        unimplemented!()
+    }
+
+    fn line_function(q: Self::G2) -> Vec<(Self::Fqe, Self::Fqe)>{
+        unimplemented!()
+    }    
+    fn multi_miller_loop(eval_points: &[(Self::G1Affine, Self::G2Affine)], lines: &[Vec<(Self::Fqe, Self::Fqe)>]) -> (Self::Fqk, Vec<Self::Fqk>){
+        unimplemented!()
+    }
     fn miller_loop<'a, I>(i: I) -> Self::Fqk
     where
         I: IntoIterator<Item = &'a (&'a <Self::G1Affine as CurveAffine>::Prepared, &'a <Self::G2Affine as CurveAffine>::Prepared)>,

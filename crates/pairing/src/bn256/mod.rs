@@ -4,6 +4,9 @@ pub mod fq12;
 pub mod fq2;
 pub mod fq6;
 pub mod fr;
+// pub mod line_precomputation;
+
+use crate::CurveProjective;
 
 pub use self::ec::{G1Affine, G1Compressed, G1Prepared, G1Uncompressed, G2Affine, G2Compressed, G2Prepared, G2Uncompressed, G1, G2};
 pub use self::fq::{Fq, FqRepr, FROBENIUS_COEFF_FQ6_C1, XI_TO_Q_MINUS_1_OVER_2};
@@ -109,6 +112,104 @@ impl Engine for Bn256 {
         f
     }
 
+    /// https://eprint.iacr.org/2024/640.pdf Algorithm 6: Miller loop with precomputed lines
+    /// actually this algorithm inst multipairing but will try to write 
+    fn multi_miller_loop(
+        eval_points: &[(Self::G1Affine, Self::G2Affine)],
+        lines: &[Vec<(Fq2, Fq2)>],
+    ) -> (Fq12, Vec<Fq12>) {
+        assert_eq!(eval_points.len(), lines.len());
+
+        fn line_evaluation(alpha: &Fq2, mu: &Fq2, p: &G1Affine) -> (Fq2, Fq2, Fq2) {
+
+            // c0 = p.y; c3 = - lambda * p.x; c4 = -mu;
+            let mut c3 = *alpha;
+            c3.negate();
+            c3.c0.mul_assign(&p.x);
+            c3.c1.mul_assign(&p.x);
+            let mut c4 = *mu;
+            c4.negate();
+        
+
+            let c0 = Fq2::one();
+        
+            (c0, c3, c4)
+        }
+        
+        // A placeholder for `mul_line_base`. In snippet 2, f is multiplied by a sparse Fq12 element using `mul_by_034`.
+        fn mul_line_base(mut f: Fq12, c0: &Fq2, c1: &Fq2, c2: &Fq2) -> Fq12 {
+            f.mul_by_034(c0, c1, c2);
+            f
+        }
+
+        let mut f_list = Vec::new();
+        let mut f = Fq12::one();
+
+        let mut lc = 0; 
+        for i in (1..SIX_U_PLUS_2_NAF.len()).rev() {
+            f.square();
+            
+            for (j, ((P, Q), L)) in eval_points.iter().zip(lines.iter()).enumerate() {
+                let (alpha, mu) = L[lc];
+                let (c0, c1, c2) = line_evaluation(&alpha, &mu, P);
+                f = mul_line_base(f, &c0, &c1, &c2);
+                f_list.push(f);
+
+                if i * i == 1 {
+                    let (alpha, bias) = L[lc + 1];
+                    let (c0, c1, c2) = line_evaluation(&alpha, &bias, P);
+                    f = mul_line_base(f, &c0, &c1, &c2);
+                    f_list.push(f);
+                }
+            }
+
+            if i == 0 {
+                lc += 1;
+            } else {
+                lc += 2;
+            }
+        }
+
+        // Frobenius map part: p - p^2 + p^3 steps
+        // this part runs through each eval point and applies
+        // three additional line evaluations with special conditions.
+        for (j, ((P, Q), L)) in eval_points.iter().zip(lines.iter()).enumerate() {
+            for k in 0..3 {
+                let (alpha, mu) = L[lc + k];
+                if k == 2 {
+                    // Special evaluation:
+                    // eval = Fp12(Fp6.ZERO(), Fp6(Fp2.ZERO(), bias.negative_of(), Fp2(Fp.ZERO(), P.x)))
+                    let mut neg_mu = mu;
+                    neg_mu.negate();
+
+                    let c0 = Fq2::zero();
+                    let c1 = mu;
+                    let px_fq2 = Fq2{c0: Fq::zero(), c1: P.x};
+
+                    // Create the second half of Fq6: Fq6(c0, c1, px_fq2)
+                    let second_half = Fq6{c0: c0, c1: c1, c2: px_fq2};
+                    let first_half = Fq6::zero();
+                    let eval = Fq12{c0: first_half, c1: second_half};
+
+                    f.mul_assign(&eval);
+                    f_list.push(f);
+                } else {
+                    // Normal line evaluation
+                    let (c0, c1, c2) = line_evaluation(&alpha, &mu, P);
+                    f = mul_line_base(f, &c0, &c1, &c2);
+                    f_list.push(f);
+                }
+            }
+        }
+
+        lc += 3;
+
+        // Check we consumed all lines
+        assert_eq!(lc, lines[0].len());
+
+        (f, f_list)
+    }
+
     fn final_exponentiation(r: &Fq12) -> Option<Fq12> {
         let mut f1 = *r;
         f1.conjugate();
@@ -202,6 +303,117 @@ impl Engine for Bn256 {
             }
             None => None,
         }
+    }
+
+    fn line_double(t: G2Affine) -> (Self::Fqe, Self::Fqe) {
+
+        let mut alpha = t.x;
+        let mut mu = t.y;
+    
+        // alpha = 3 * x^2 / 2 * y
+        alpha.square();
+
+        let mut three_fq2 = Fq2::one();
+        three_fq2.double();
+        three_fq2.add_assign(&Fq2::one());
+
+        alpha.mul_assign(&three_fq2);
+        let mut tmp = t.y;
+        tmp.double();
+        tmp.inverse().unwrap();
+        alpha.mul_assign(&tmp);
+
+        // mu = y - alpha * x
+        let mut tmp = t.x;
+        tmp.mul_assign(&alpha);
+        mu.sub_assign(&tmp);
+
+        (alpha, mu)
+    }
+
+    fn line_add(t: Self::G2Affine, p: Self::G2Affine) -> (Self::Fqe, Self::Fqe) {
+    
+        let x1 = t.x;
+        let y1 = t.y;
+        let x2 = p.x;
+        let y2 = p.y;
+    
+        let mut alpha = y2;
+        let mut mu = y1; 
+
+        // alpha = (y2 - y1) / (x2 - x1)
+
+        alpha.sub_assign(&y2);
+        let mut tmp = x2; 
+        tmp.sub_assign(&x1);
+        tmp.inverse().unwrap();
+        alpha.mul_assign(&tmp);
+
+        let mut tmp = x1; 
+        tmp.mul_assign(&alpha);
+        mu.sub_assign(&tmp);
+    
+        (alpha, mu)
+    }
+
+    fn line_function(q: Self::G2) -> Vec<(Self::Fqe, Self::Fqe)> {
+    
+        let mut l = vec![];
+        let mut t = q;
+    
+        for i in (1..SIX_U_PLUS_2_NAF.len()).rev()  {
+            use crate::CurveProjective;
+            let (alpha, mu) = Self::line_double(t.into_affine());
+            t.double();
+            l.push((alpha, mu));
+    
+            if i != 0 {
+                let q_t = if i == 1 { q } 
+                    else { 
+                        let mut tmp = q; 
+                        tmp.negate();
+                        tmp };
+                let (alpha, mu) = Self::line_add(t.into_affine(), q_t.into_affine());
+                t.add_assign(&q_t);
+                l.push((alpha, mu));
+            }
+        }
+    
+        // Frobenius map calculations for BN256
+        let mut pi_1_q_x = q.x; 
+        let mut pi_1_q_y = q.y; 
+        pi_1_q_x.conjugate();
+        pi_1_q_x.mul_assign(&FROBENIUS_COEFF_FQ6_C1[1]);
+        pi_1_q_y.conjugate();
+        pi_1_q_y.mul_assign(&XI_TO_Q_MINUS_1_OVER_2);
+        let pi_1_q = Self::G2 {
+            x: pi_1_q_x,
+            y: pi_1_q_y,
+            z: Fq2::one(),
+        };
+
+        let mut pi_2_q_x = q.x; 
+        let mut pi_2_q_y = q.y; 
+        pi_2_q_x.mul_assign(&FROBENIUS_COEFF_FQ6_C1[2]);
+        let pi_2_q = Self::G2 {
+            x: pi_2_q_x,
+            y: q.y,
+            z: Fq2::one(),
+        };
+
+    
+        let (alpha, mu) = Self::line_add(t.into_affine(), pi_1_q.into());
+        t.add_assign(&pi_1_q);
+        l.push((alpha.into(), mu.into()));
+
+        let mut tmp = pi_2_q;
+        tmp.y.conjugate();
+        let (alpha, mu) = Self::line_add(t.into_affine(), tmp.into());
+        tmp.y.conjugate();
+        t.add_assign(&tmp);
+        l.push((alpha.into(), mu.into()));
+    
+        l
     }
 }
 
