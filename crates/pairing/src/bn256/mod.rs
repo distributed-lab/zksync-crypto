@@ -136,11 +136,6 @@ impl Engine for Bn256 {
             (c0, c3, c4)
         }
         
-        // A placeholder for `mul_line_base`. In snippet 2, f is multiplied by a sparse Fq12 element using `mul_by_034`.
-        fn mul_line_base(mut f: Fq12, c0: &Fq2, c1: &Fq2, c2: &Fq2) -> Fq12 {
-            f.mul_by_034(c0, c1, c2);
-            f
-        }
 
         let mut f_list = Vec::new();
         let mut f = Fq12::one();
@@ -149,16 +144,16 @@ impl Engine for Bn256 {
         for i in (1..SIX_U_PLUS_2_NAF.len()).rev() {
             f.square();
             
-            for (j, ((P, Q), L)) in eval_points.iter().zip(lines.iter()).enumerate() {
+            for  ((P, Q), L) in eval_points.iter().zip(lines.iter()) {
                 let (alpha, mu) = L[lc];
                 let (c0, c1, c2) = line_evaluation(&alpha, &mu, P);
-                f = mul_line_base(f, &c0, &c1, &c2);
+                f.mul_by_034(&c0, &c1, &c2);
                 f_list.push(f);
 
                 if i * i == 1 {
                     let (alpha, bias) = L[lc + 1];
                     let (c0, c1, c2) = line_evaluation(&alpha, &bias, P);
-                    f = mul_line_base(f, &c0, &c1, &c2);
+                    f.mul_by_034(&c0, &c1, &c2);
                     f_list.push(f);
                 }
             }
@@ -173,7 +168,8 @@ impl Engine for Bn256 {
         // Frobenius map part: p - p^2 + p^3 steps
         // this part runs through each eval point and applies
         // three additional line evaluations with special conditions.
-        for (j, ((P, Q), L)) in eval_points.iter().zip(lines.iter()).enumerate() {
+        // Todo_O_O need to ckeck if in circuits 3 frob line eval or 2 ???
+        for ((P, Q), L) in eval_points.iter().zip(lines.iter()) {
             for k in 0..3 {
                 let (alpha, mu) = L[lc + k];
                 if k == 2 {
@@ -186,7 +182,6 @@ impl Engine for Bn256 {
                     let c1 = mu;
                     let px_fq2 = Fq2{c0: Fq::zero(), c1: P.x};
 
-                    // Create the second half of Fq6: Fq6(c0, c1, px_fq2)
                     let second_half = Fq6{c0: c0, c1: c1, c2: px_fq2};
                     let first_half = Fq6::zero();
                     let eval = Fq12{c0: first_half, c1: second_half};
@@ -196,7 +191,7 @@ impl Engine for Bn256 {
                 } else {
                     // Normal line evaluation
                     let (c0, c1, c2) = line_evaluation(&alpha, &mu, P);
-                    f = mul_line_base(f, &c0, &c1, &c2);
+                    f.mul_by_034(&c0, &c1, &c2);
                     f_list.push(f);
                 }
             }
@@ -393,7 +388,6 @@ impl Engine for Bn256 {
         };
 
         let mut pi_2_q_x = q.x; 
-        let mut pi_2_q_y = q.y; 
         pi_2_q_x.mul_assign(&FROBENIUS_COEFF_FQ6_C1[2]);
         let pi_2_q = Self::G2 {
             x: pi_2_q_x,
