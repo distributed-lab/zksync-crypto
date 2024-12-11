@@ -70,7 +70,7 @@ pub trait Engine: ScalarEngine {
     /// Compute the line function oracle.
     fn line_function(q: Self::G2) -> Vec<(Self::Fqe, Self::Fqe)>;
 
-    fn multi_miller_loop(eval_points: &[(Self::G1Affine, Self::G2Affine)], lines: &[Vec<(Self::Fqe, Self::Fqe)>]) -> (Self::Fqk, Vec<Self::Fqk>);
+    fn multi_miller_loop(eval_points: &[Self::G1Affine], lines: &[Vec<(Self::Fqe, Self::Fqe)>]) -> (Self::Fqk, Vec<Self::Fqk>);
 
     /// Performs a complete pairing operation `(p, q)`.
     fn pairing<G1, G2>(p: G1, q: G2) -> Self::Fqk

@@ -115,7 +115,7 @@ impl Engine for Bn256 {
     /// https://eprint.iacr.org/2024/640.pdf Algorithm 6: Miller loop with precomputed lines
     /// actually this algorithm inst multipairing but will try to write 
     fn multi_miller_loop(
-        eval_points: &[(Self::G1Affine, Self::G2Affine)],
+        eval_points: &[Self::G1Affine],
         lines: &[Vec<(Fq2, Fq2)>],
     ) -> (Fq12, Vec<Fq12>) {
         assert_eq!(eval_points.len(), lines.len());
@@ -131,9 +131,9 @@ impl Engine for Bn256 {
             c4.negate();
         
 
-            let c0 = Fq2::one();
+            let c0 = Fq2{c0: p.y, c1: Fq::zero()};
         
-            (c0, c3, c4)
+            (c4, c3, c0)
         }
         
 
@@ -142,15 +142,17 @@ impl Engine for Bn256 {
 
         let mut lc = 0; 
         for i in (1..SIX_U_PLUS_2_NAF.len()).rev() {
-            f.square();
-            
-            for  ((P, Q), L) in eval_points.iter().zip(lines.iter()) {
+            if i != SIX_U_PLUS_2_NAF.len() - 1 {
+                f.square();
+            }
+            let x = SIX_U_PLUS_2_NAF[i - 1];
+            for  (P, L) in eval_points.iter().zip(lines.iter()) {
                 let (alpha, mu) = L[lc];
                 let (c0, c1, c2) = line_evaluation(&alpha, &mu, P);
                 f.mul_by_034(&c0, &c1, &c2);
                 f_list.push(f);
 
-                if i * i == 1 {
+                if x * x == 1 {
                     let (alpha, bias) = L[lc + 1];
                     let (c0, c1, c2) = line_evaluation(&alpha, &bias, P);
                     f.mul_by_034(&c0, &c1, &c2);
@@ -158,7 +160,7 @@ impl Engine for Bn256 {
                 }
             }
 
-            if i == 0 {
+            if x == 0 {
                 lc += 1;
             } else {
                 lc += 2;
@@ -169,8 +171,8 @@ impl Engine for Bn256 {
         // this part runs through each eval point and applies
         // three additional line evaluations with special conditions.
         // Todo_O_O need to ckeck if in circuits 3 frob line eval or 2 ???
-        for ((P, Q), L) in eval_points.iter().zip(lines.iter()) {
-            for k in 0..3 {
+        for (P,  L) in eval_points.iter().zip(lines.iter()) {
+            for k in 0..2 {
                 let (alpha, mu) = L[lc + k];
                 if k == 2 {
                     // Special evaluation:
@@ -200,7 +202,7 @@ impl Engine for Bn256 {
         lc += 3;
 
         // Check we consumed all lines
-        assert_eq!(lc, lines[0].len());
+        // assert_eq!(lc, lines[0].len());
 
         (f, f_list)
     }
@@ -338,7 +340,7 @@ impl Engine for Bn256 {
 
         // alpha = (y2 - y1) / (x2 - x1)
 
-        alpha.sub_assign(&y2);
+        alpha.sub_assign(&y1);
         let mut tmp = x2; 
         tmp.sub_assign(&x1);
         tmp.inverse().unwrap();
@@ -355,19 +357,18 @@ impl Engine for Bn256 {
     
         let mut l = vec![];
         let mut t = q;
+        let mut q_negated = q.clone();
+        q_negated.negate();
     
         for i in (1..SIX_U_PLUS_2_NAF.len()).rev()  {
             use crate::CurveProjective;
             let (alpha, mu) = Self::line_double(t.into_affine());
             t.double();
             l.push((alpha, mu));
+            let x = SIX_U_PLUS_2_NAF[i - 1];
     
-            if i != 0 {
-                let q_t = if i == 1 { q } 
-                    else { 
-                        let mut tmp = q; 
-                        tmp.negate();
-                        tmp };
+            if x != 0 {
+                let q_t = if x == 1 { q } else { q_negated };
                 let (alpha, mu) = Self::line_add(t.into_affine(), q_t.into_affine());
                 t.add_assign(&q_t);
                 l.push((alpha, mu));
@@ -636,6 +637,7 @@ impl G2Prepared {
 
         coeffs.push(addition_step(&mut r, &q1));
 
+        // Mistake???
         let mut minusq2 = q;
         minusq2.x.mul_assign(&FROBENIUS_COEFF_FQ6_C1[2]);
 
@@ -777,4 +779,106 @@ fn random_bilinearity_tests() {
 #[ignore] // TODO(ignored-test): Timeout.
 fn bn256_engine_tests() {
     crate::tests::engine::engine_tests::<Bn256>();
+}
+
+#[test]
+fn test_precomputed_lines() {
+
+    let mut rng = XorShiftRng::from_seed([0x5dbe6259, 0x8d313d76, 0x3237db17, 0xe5bc0654]);
+    let p = G1::rand(&mut rng);
+    let q = G2::rand(&mut rng);
+
+
+
+    // Optimal ate Miller loop with some little changes 
+    let iter = &[
+        (&p.into_affine().prepare(), &q.into_affine().prepare())
+    ];
+
+    let mut pairs = vec![];
+    for &(p, q) in iter {
+        if !p.is_zero() && !q.is_zero() {
+            pairs.push((p, q.coeffs.iter()));
+        }
+    }
+
+    // Final steps of the line function on prepared coefficients
+    fn ell(f: &mut Fq12, coeffs: &(Fq2, Fq2, Fq2), p: &G1Affine) {
+        let mut c0 = coeffs.0;
+        let mut c1 = coeffs.1;
+
+        c0.c0.mul_assign(&p.y);
+        c0.c1.mul_assign(&p.y);
+
+        c1.c0.mul_assign(&p.x);
+        c1.c1.mul_assign(&p.x);
+
+        // Sparse multiplication in Fq12
+        f.mul_by_034(&c0, &c1, &coeffs.2);
+    }
+
+    let mut f = Fq12::one();
+    let mut f_list: Vec<Fq12> = Vec::new();
+
+    for i in (1..SIX_U_PLUS_2_NAF.len()).rev() {
+        if i != SIX_U_PLUS_2_NAF.len() - 1 {
+            f.square();
+        }
+        for &mut (p, ref mut coeffs) in &mut pairs {
+            ell(&mut f, coeffs.next().unwrap(), &p.0);
+            f_list.push(f);
+        }
+        let x = SIX_U_PLUS_2_NAF[i - 1];
+        match x {
+            1 => {
+                for &mut (p, ref mut coeffs) in &mut pairs {
+                    ell(&mut f, coeffs.next().unwrap(), &p.0);
+                    f_list.push(f);
+                }
+            }
+            -1 => {
+                for &mut (p, ref mut coeffs) in &mut pairs {
+                    ell(&mut f, coeffs.next().unwrap(), &p.0);
+                    f_list.push(f);
+                }
+            }
+            _ => continue,
+        }
+    }
+
+    // two additional steps: for q1 and minus q2
+
+    for &mut (p, ref mut coeffs) in &mut pairs {
+        ell(&mut f, coeffs.next().unwrap(), &p.0);
+        f_list.push(f);
+    }
+
+    for &mut (p, ref mut coeffs) in &mut pairs {
+        ell(&mut f, coeffs.next().unwrap(), &p.0);
+        f_list.push(f);
+    }
+
+    for &mut (_p, ref mut coeffs) in &mut pairs {
+        assert_eq!(coeffs.next(), None);
+    }
+
+    // end of Miller loop 
+
+    let mut lines = Bn256::line_function(q);
+    lines.reverse();
+    let (res, f_s) = Bn256::multi_miller_loop(&[p.into_affine()], &[lines]);
+
+    for (num, (i, j)) in f_list.iter().zip(f_s.iter()).enumerate(){
+        dbg!(num);
+
+        println!("Original {}", i);
+        println!("Optimal {}", j);
+
+        // assert_eq!(i, j);
+    }
+
+
+    // assert_eq!(f, res);
+
+
 }

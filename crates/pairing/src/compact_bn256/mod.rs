@@ -55,7 +55,7 @@ impl Engine for Bn256 {
     fn line_function(q: Self::G2) -> Vec<(Self::Fqe, Self::Fqe)>{
         unimplemented!()
     }
-    fn multi_miller_loop(eval_points: &[(Self::G1Affine, Self::G2Affine)], lines: &[Vec<(Self::Fqe, Self::Fqe)>])-> (Self::Fqk, Vec<Self::Fqk>){
+    fn multi_miller_loop(eval_points: &[Self::G1Affine], lines: &[Vec<(Self::Fqe, Self::Fqe)>])-> (Self::Fqk, Vec<Self::Fqk>){
         unimplemented!()
     }
     fn miller_loop<'a, I>(i: I) -> Self::Fqk

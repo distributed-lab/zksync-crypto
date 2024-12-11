@@ -323,6 +323,20 @@ impl Engine for DummyEngine {
     fn final_exponentiation(this: &Self::Fqk) -> Option<Self::Fqk> {
         Some(*this)
     }
+    fn line_double(t: Self::G2Affine) -> (Self::Fqe, Self::Fqe){
+        unimplemented!()
+    }
+
+    fn line_add(t: Self::G2Affine, p: Self::G2Affine) -> (Self::Fqe, Self::Fqe){
+        unimplemented!()
+    }
+
+    fn line_function(q: Self::G2) -> Vec<(Self::Fqe, Self::Fqe)>{
+        unimplemented!()
+    }    
+    fn multi_miller_loop(eval_points: &[Self::G1Affine], lines: &[Vec<(Self::Fqe, Self::Fqe)>]) -> (Self::Fqk, Vec<Self::Fqk>){
+        unimplemented!()
+    }
 }
 
 impl CurveProjective for Fr {
